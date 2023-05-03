@@ -252,5 +252,217 @@ class MainWindow(QWidget):
             self.swift.set_position(x, y, z)
             self.get_position()
             
-    
+    @Slot()
+def move_to_home(self):
+    # Prüfen, ob die Swift-Verbindung vorhanden ist
+    if self.swift is not None:
+        # Geschwindigkeitsfaktor auf 1 setzen
+        self.swift.set_speed_factor(1)
+        # Gewünschte Home-Position definieren
+        home_position = (200, 0, 150)
+        speed = 50
+        # Roboterarm zur Home-Position bewegen
+        self.swift.set_position(*home_position, speed=speed)
+        # Aktuelle Position abrufen
+        self.get_position()
+
+@Slot()
+def open_canvas(self):
+    # Zeichnungsszene erstellen
+    scene = DrawingScene(self)
+    scene.setBackgroundBrush(QColor("white"))
+    # QGraphicsView für die Zeichnungsszene erstellen
+    self.canvas_window = QGraphicsView(scene)
+    self.canvas_window.setSceneRect(0, 0, 800, 600)  # Explizit das Szenenrechteck festlegen
+    self.canvas_window.setWindowTitle("White Canvas")
+    self.canvas_window.setGeometry(100, 100, 800, 600)
+    self.canvas_window.setRenderHint(QPainter.Antialiasing)
+    self.canvas_window.setInteractive(True)
+    self.canvas_window.show()
+
+@Slot()
+def edge_detection(self):
+    # Dialog zum Öffnen einer Bilddatei anzeigen
+    image_file, _ = QFileDialog.getOpenFileName(self, "Open Image", "", "Images (*.png *.xpm *.jpg *.bmp *.jpeg)")
+    if image_file:
+        self.process_image(image_file)
+
+def process_image(self, image_file):
+    # Bild laden und in Graustufen konvertieren
+    image = cv2.imread(image_file)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # Kanten im Bild erkennen
+    edges = cv2.Canny(gray, 100, 200)
+
+    # QImage aus Kantenbild erstellen
+    qt_img = QImage(edges.data, edges.shape[1], edges.shape[0], edges.strides[0], QImage.Format_Grayscale8)
+    pixmap = QPixmap.fromImage(qt_img)
+
+    # QGraphicsScene für das Kantenbild erstellen
+    scene = QGraphicsScene(self)
+    scene.setBackgroundBrush(QColor("white"))
+    scene.addPixmap(pixmap)
+
+    # QGraphicsView für die Kantenbildszene erstellen
+    self.canvas_window = QGraphicsView(scene)
+    self.canvas_window.setWindowTitle("Loaded Image")
+    self.canvas_window.setGeometry(100, 100, 800, 600)
+    self.canvas_window.setRenderHint(QPainter.Antialiasing)
+    self.canvas_window.setInteractive(True)
+    self.canvas_window.show()
+
+    # Konturen im Kantenbild finden
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    self.contours = contours
+
+def contours_to_points(self, contours):
+    # Leere Liste für die Punkte erstellen
+    points = []
+    # Über alle Konturen iterieren
+    for contour in contours:
+        # Über alle Punkte in der aktuellen Kontur iterieren
+        for point in contour:
+            # Punkt zur Liste hinzufügen
+            points.append((point[0][0], point[0][1]))
+    return points
+
+def distance(self, point1, point2):
+    # Euklidischen Abstand zwischen zwei Punkten berechnen
+    return math.sqrt((point1[0] - point2[0])**2 + (point1[1] - point2[1])**2)
+
+def send_points_to_swift(self, points):
+    # Prüfen, ob die Swift-Verbindung vorhanden ist
+    if self.swift is not None:
+        # Zielbereich für die X- und Y-Koordinaten definieren
+        target_x_range = (155, 250)
+        target_y_range = (-75, 75)
+
+        # Breite und Höhe des Zielbereichs berechnen
+        target_width = target_x_range[1] - target_x_range[0]
+        target_height = target_y_range[1] - target_y_range[0]
+
+        # Seitenverhältnisse von Leinwand und Zielbereich berechnen
+        canvas_aspect_ratio = self.canvas_width / self.canvas_height
+        target_aspect_ratio = target_width / target_height
+
+        # Skalierungsfaktoren für X- und Y-Koordinaten berechnen
+        if canvas_aspect_ratio > target_aspect_ratio:
+            scale_x = target_width / self.canvas_width
+            scale_y = scale_x
+        else:
+            scale_y = target_height / self.canvas_height
+            scale_x = scale_y
+
+        # Z-Werte für Zeichnung und angehobene Position festlegen
+        z_drawing = 38  # Z-Wert nach Bedarf anpassen
+        z_lifted = 45  # Z-Wert für die angehobene Position anpassen
+        speed = 5
+
+        # Ersten Punkt in der Liste abrufen
+        prev_point = points[0]
+        # Roboterarm zur ersten Position bewegen (angehoben)
+        self.swift.set_position(prev_point[0] * scale_x, prev_point[1] * scale_y, z_lifted, speed=speed)
+
+        # Über die restlichen Punkte in der Liste iterieren
+        for i in range(1, len(points)):
+            curr_point = points[i]
+            prev_point = points[i - 1]
+
+            # Skalierte X- und Y-Koordinaten für aktuellen und vorherigen Punkt berechnen
+            x_scaled = target_x_range[0] + curr_point[0] * scale_x
+            y_scaled = target_y_range[0] + curr_point[1] * scale_y
+            x_prev_scaled = target_x_range[0] + prev_point[0] * scale_x
+            y_prev_scaled = target_y_range[0] + prev_point[1] * scale_y
+
+            # Abstand zwischen aktuellem und vorherigem Punkt berechnen
+            dist = self.distance((x_scaled, y_scaled), (x_prev_scaled, y_prev_scaled))
+
+            # Schwellenwert für das Erkennen von Lücken festlegen
+            gap_threshold = 10  # Schwellenwert nach Bedarf anpassen
+                        if dist > gap_threshold:
+                # Wenn der Abstand größer als der Schwellenwert ist, hebe den Roboterarm an
+                self.swift.set_position(x_prev_scaled, y_prev_scaled, z_lifted, speed=speed)
+                time.sleep(0.2)
+                self.swift.set_position(x_scaled, y_scaled, z_lifted, speed=speed)
+                time.sleep(0.2)
+
+            # Bewege den Roboterarm zur aktuellen Position
+            self.swift.set_position(x_scaled, y_scaled, z_drawing, speed=speed)
+            time.sleep(0.01)  # Füge eine kurze Verzögerung zwischen den Bewegungen hinzu
+
+        # Bewege den Roboterarm zurück zur Ausgangsposition, wenn alle Punkte abgearbeitet sind
+        if self.swift is not None:
+            self.swift.set_speed_factor(1)
+            # Setze hier deine gewünschte Ausgangsposition
+            home_position = (200, 0, 150)
+            speed = 50
+            self.swift.set_position(*home_position, speed=speed)
+            self.get_position()
+
+@Slot()
+def export_points(self):
+    # Überprüfe, ob das Canvas-Fenster vorhanden ist
+    if self.canvas_window is not None:
+        # Wenn die Szene eine DrawingScene ist, exportiere die Punkte daraus
+        if isinstance(self.canvas_window.scene(), DrawingScene):
+            points = self.canvas_window.scene().export_points()
+        else:  # Wenn die Szene keine DrawingScene ist, handelt es sich um eine Bildszene
+            points = self.contours_to_points(self.contours)
+        print(f"Exporting points: {points}")
+        self.send_points_to_swift(points)
+
+def get_contours_from_image(self, image):
+    # Konvertiere das Bild in Graustufen
+    gray = image.convertToFormat(QImage.Format_Grayscale8)
+    # Ermittle Kanten im Bild
+    edges = cv2.cvtColor(np.array(gray), cv2.COLOR_GRAY2BGR)
+    # Finde Konturen im Bild
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return contours
+
+def grab_pencil(self):
+    # Überprüfe, ob eine Verbindung zum Swift-Roboter besteht
+    if self.swift is not None:
+        # Definiere die tatsächlichen Koordinaten des Stifts
+        pencil_position = (200, 45, 50)
+        z_lifted = 150  # Passe den Z-Wert für die angehobene Position an
+        speed = 100
+
+        # Bewege den Roboterarm zur Stift-Position
+        self.swift.set_polar(200, 45, 150, speed=speed)
+        time.sleep(5)
+        self.swift.set_polar(*pencil_position, speed=speed)
+        time.sleep(5)
+
+        # Schließe den Greifer, um den Stift zu greifen
+        self.swift.set_gripper(True)
+        time.sleep(10)
+
+        # Hebe den Stift an
+        self.swift.set_polar(pencil_position[0], pencil_position[1], z_lifted, speed=speed)
+        time.sleep(5)
+        self.swift.set_polar(200, 90, 150, speed=speed)
+        time.sleep(5)
+
+        
+def main():
+    # Erstelle eine QApplication-Instanz, die für Qt-Anwendungen benötigt wird.
+    app = QApplication(sys.argv)
+
+    # Erstelle eine Instanz der MainWindow-Klasse, die die Hauptbenutzeroberfläche darstellt.
+    window = MainWindow()
+
+    # Zeige das Hauptfenster der Anwendung an.
+    window.show()
+
+    # Führe die Qt-Anwendung aus und warte auf Benutzeraktionen.
+    sys.exit(app.exec())
+
+
+if __name__ == '__main__':
+    # Wenn das Skript direkt ausgeführt wird (und nicht als Modul importiert wird),
+    # rufe die 'main'-Funktion auf, um das Programm zu starten.
+    main()
+
+   
 
